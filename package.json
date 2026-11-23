@@ -1,0 +1,88 @@
+{
+  "name": "jrcopilotcode",
+  "displayName": "JR Copilot Code",
+  "description": "Ask the Microsoft Copilot Windows app for code and insert the answer into the editor.",
+  "version": "0.1.0",
+  "publisher": "jorodriguezpr",
+  "author": "Jose Rodriguez - Micro Computer Repair Services (http://www.microrepair.net)",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "os": ["win32"],
+  "categories": ["Programming Languages", "Other"],
+  "main": "./src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "jrcopilotcode.ask", "title": "Ask and insert code", "category": "Copilot App" },
+      { "command": "jrcopilotcode.explain", "title": "Ask and show the answer", "category": "Copilot App" },
+      { "command": "jrcopilotcode.insertLast", "title": "Insert last answer's code again", "category": "Copilot App" },
+      { "command": "jrcopilotcode.newChat", "title": "Start a new chat", "category": "Copilot App" },
+      { "command": "jrcopilotcode.launch", "title": "Restart the Copilot app with accessibility on", "category": "Copilot App" },
+      { "command": "jrcopilotcode.status", "title": "Check connection", "category": "Copilot App" }
+    ],
+    "keybindings": [
+      { "command": "jrcopilotcode.ask", "key": "ctrl+alt+shift+c", "when": "editorTextFocus" },
+      { "command": "jrcopilotcode.explain", "key": "ctrl+alt+shift+e", "when": "editorTextFocus" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "jrcopilotcode.ask", "group": "9_jrcopilotcode@1" },
+        { "command": "jrcopilotcode.explain", "group": "9_jrcopilotcode@2" }
+      ]
+    },
+    "configuration": {
+      "title": "JR Copilot Code",
+      "properties": {
+        "jrcopilotcode.copilotExe": {
+          "type": "string",
+          "default": "C:\\Program Files (x86)\\Microsoft\\Copilot\\Application\\copilotapp.exe",
+          "description": "Path to the Microsoft Copilot app (copilotapp.exe)."
+        },
+        "jrcopilotcode.timeoutSeconds": {
+          "type": "number", "default": 180, "minimum": 20,
+          "description": "How long to wait for Copilot to finish an answer."
+        },
+        "jrcopilotcode.newChatEachQuestion": {
+          "type": "boolean", "default": false,
+          "description": "Start a new Copilot chat for every question (otherwise follow-ups keep the conversation context)."
+        },
+        "jrcopilotcode.includeSelection": {
+          "type": "boolean", "default": true,
+          "description": "Send the selected code (with file name and language) along with the question."
+        },
+        "jrcopilotcode.codeInstruction": {
+          "type": "string",
+          "default": "Answer with the complete code in a single fenced code block.",
+          "description": "Added to the end of 'Ask and insert code' questions."
+        },
+        "jrcopilotcode.insertMode": {
+          "type": "string",
+          "enum": ["auto", "newDocument", "clipboard"],
+          "enumDescriptions": [
+            "Replace the selection, or insert at the cursor when nothing is selected.",
+            "Open the code in a new editor tab.",
+            "Only copy the code to the clipboard."
+          ],
+          "default": "auto"
+        },
+        "jrcopilotcode.multipleBlocks": {
+          "type": "string",
+          "enum": ["pick", "all", "first"],
+          "default": "pick",
+          "description": "What to insert when the answer has more than one code block."
+        },
+        "jrcopilotcode.autoRestartCopilot": {
+          "type": "string",
+          "enum": ["ask", "always", "never"],
+          "default": "ask",
+          "description": "When the Copilot app is closed or running without accessibility, (re)start it with --force-renderer-accessibility."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/lib.test.js",
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository --skip-license"
+  }
+}
