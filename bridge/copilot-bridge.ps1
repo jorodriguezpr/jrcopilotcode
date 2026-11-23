@@ -67,6 +67,7 @@ $Scope = [System.Windows.Automation.TreeScope]
 $CT = [System.Windows.Automation.ControlType]
 $EDITOR_ID = 'm365-chat-editor-target-element'
 $MSGLIST_ID = 'llm-web-ui-messageList-scrollable-container'
+$INPUT_BOX_ID = 'm365-chat-input-shared-container'
 
 function Out-Json($obj) { [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compress -Depth 6)); [Console]::Out.Flush() }
 function Say($msg) { Out-Json @{ type = 'progress'; message = $msg } }
@@ -82,9 +83,38 @@ function Get-CopilotWindow {
   return $AE::FromHandle($p.MainWindowHandle)
 }
 
+# Two Copilot screens exist: the work (Microsoft 365) one, whose chat box has an id, and the
+# consumer one, whose chat box ("Message Copilot") has none but sits in the shared input container.
+# JRCOPILOT_COMPAT=1 skips the id lookups (to test the consumer path on a work account).
 function Find-Editor($root) {
   if (-not $root) { return $null }
-  return $root.FindFirst($Scope::Descendants, (Cond $AE::AutomationIdProperty $EDITOR_ID))
+  if (-not $env:JRCOPILOT_COMPAT) {
+    $e = $root.FindFirst($Scope::Descendants, (Cond $AE::AutomationIdProperty $EDITOR_ID))
+    if ($e) { return $e }
+  }
+  # Both screens: the chat box is an Edit with class "fai-EditorInput__input ..." (name "Message Copilot").
+  $e = @($root.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Edit)) |
+         Where-Object { $_.Current.ClassName -like 'fai-EditorInput__input*' }) | Select-Object -First 1
+  if ($e) { return $e }
+  $box = $root.FindFirst($Scope::Descendants, (Cond $AE::AutomationIdProperty $INPUT_BOX_ID))
+  if ($box) { return $box.FindFirst($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Edit)) }
+  return $null
+}
+
+# True when the focused element is the chat box (or something inside it).
+function Test-InEditor($focused, $editor) {
+  $el = $focused
+  for ($i = 0; $el -and $i -lt 4; $i++) {
+    if ([System.Windows.Automation.Automation]::Compare($el, $editor)) { return $true }
+    $el = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($el)
+  }
+  return $false
+}
+
+function Find-NewChat($root) {
+  $nc = Find-ByName $root 'New chat' $null
+  if (-not $nc) { $nc = Find-ByName $root 'New' $CT::Hyperlink }   # consumer screen
+  return $nc
 }
 
 function Find-ByName($root, $name, $type) {
@@ -97,12 +127,32 @@ function Invoke-Element($el) {
   $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 
-# Message title elements look like: Text id="copilot-message-_r_1ht_-title"; the parent is the message group.
-function Get-CopilotTitles($root) {
+# Copilot's answers, oldest first, as @{ key; msg }.
+# Work screen: Text id="copilot-message-_r_1ht_-title" whose parent is the message group (key = that id).
+# Otherwise: the message groups (class fai-CopilotMessage), keyed by position.
+function Get-CopilotMessages($root) {
   $list = $root.FindFirst($Scope::Descendants, (Cond $AE::AutomationIdProperty $MSGLIST_ID))
   if (-not $list) { return @() }
-  $texts = $list.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Text))
-  return @($texts | Where-Object { $_.Current.AutomationId -like 'copilot-message-*-title' })
+  if (-not $env:JRCOPILOT_COMPAT) {
+    $texts = $list.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Text))
+    $titles = @($texts | Where-Object { $_.Current.AutomationId -like 'copilot-message-*-title' })
+    if ($titles.Count -gt 0) {
+      return @($titles | ForEach-Object { @{ key = $_.Current.AutomationId; msg = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_) } })
+    }
+  }
+  $groups = @($list.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Group)) |
+              Where-Object { $_.Current.ClassName -like 'fai-CopilotMessage*' })
+  $i = 0
+  return @($groups | ForEach-Object { @{ key = "pos$i"; msg = $_ }; $i++ })
+}
+
+# "Copy Response" on the work screen; any other "Copy ..." answer button (not a code block's) otherwise.
+function Find-CopyResponse($msg) {
+  $b = Find-ByName $msg 'Copy Response' $CT::Button
+  if ($b) { return $b }
+  return @($msg.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Button)) |
+           Where-Object { $_.Current.Name -match '^Copy' -and $_.Current.Name -notmatch 'code' -and $_.Current.AutomationId -ne 'copy-button' }) |
+         Select-Object -First 1
 }
 
 function Get-Clip {
@@ -198,7 +248,7 @@ function Get-Blocks($msg) {
 }
 
 function Get-ResponseText($msg) {
-  $btn = Find-ByName $msg 'Copy Response' $CT::Button
+  $btn = Find-CopyResponse $msg
   if ($btn) {
     $sentinel = '__jrcopilotcode_' + [guid]::NewGuid().ToString('N')
     Set-Clip $sentinel
@@ -261,7 +311,7 @@ try {
     }
     'newchat' {
       $w = Require-Ready
-      $nc = Find-ByName $w 'New chat' $null
+      $nc = Find-NewChat $w
       if (-not $nc) { Fail 'NO_NEW_CHAT' '"New chat" link not found.' }
       Invoke-Element $nc
       Out-Json @{ type = 'result'; ok = $true }
@@ -273,11 +323,11 @@ try {
 
       $w = Require-Ready
       if ($NewChat) {
-        $nc = Find-ByName $w 'New chat' $null
+        $nc = Find-NewChat $w
         if ($nc) { Say 'Starting a new chat...'; Invoke-Element $nc; Start-Sleep -Milliseconds 1500 }
       }
       $before = @{}
-      foreach ($t in (Get-CopilotTitles $w)) { $before[$t.Current.AutomationId] = $true }
+      foreach ($m in (Get-CopilotMessages $w)) { $before[$m.key] = $true }
 
       $hwnd = New-Object IntPtr ($w.Current.NativeWindowHandle)
       $prevFg = [JrCopilot.Win32]::GetForegroundWindow()
@@ -293,14 +343,14 @@ try {
         Start-Sleep -Milliseconds 300
         # Safety: only type if the keyboard focus really is the Copilot chat box.
         $f = $AE::FocusedElement
-        if (-not $f -or $f.Current.AutomationId -ne $EDITOR_ID) {
+        if (-not $f -or -not (Test-InEditor $f $ed)) {
           Fail 'FOCUS_FAILED' 'Could not put the keyboard focus in the Copilot chat box; nothing was typed.'
         }
         [System.Windows.Forms.SendKeys]::SendWait('^a')
         [System.Windows.Forms.SendKeys]::SendWait('^v')
         Start-Sleep -Milliseconds 400
         $f = $AE::FocusedElement
-        if (-not $f -or $f.Current.AutomationId -ne $EDITOR_ID) {
+        if (-not $f -or -not (Test-InEditor $f $ed)) {
           Fail 'FOCUS_FAILED' 'Focus left the Copilot chat box before sending; the question was not sent.'
         }
         [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
@@ -319,19 +369,26 @@ try {
 
         Say 'Waiting for the answer...'
         $deadline = $started.AddSeconds($TimeoutSec)
-        $msg = $null; $lastSig = ''; $stable = 0; $announced = $false; $polls = 0; $notReadySince = $null
+        $msg = $null; $lastSig = ''; $stable = 0; $announced = $false; $polls = 0; $notReadySince = $null; $quietSig = ''; $quietSince = Get-Date
         while ((Get-Date) -lt $deadline) {
           Start-Sleep -Milliseconds 800
           if ((++$polls % 5) -eq 1) { Dbg "poll $polls" }
           if (Test-PageError $w) { Fail 'COPILOT_ERROR' 'Copilot shows "Unable to load the content". Click Refresh in the Copilot app and ask again (if it keeps happening, wait a few minutes - Copilot may be limiting requests).' }
           # Find the newest answer again on every poll: React can replace the element while streaming.
-          $new = @(Get-CopilotTitles $w | Where-Object { -not $before.ContainsKey($_.Current.AutomationId) })
+          $new = @(Get-CopilotMessages $w | Where-Object { -not $before.ContainsKey($_.key) })
           if ($new.Count -eq 0) { continue }
-          $msg = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($new[-1])
+          $msg = $new[-1].msg
           if (-not $msg) { continue }
           if (-not $announced) { Say 'Copilot is answering...'; $announced = $true }
-          $done = [bool](Find-ByName $msg 'Copy Response' $CT::Button)
-          if (-not $done) { $stable = 0; continue }
+          $done = [bool](Find-CopyResponse $msg)
+          if (-not $done) {
+            # Last resort for a screen without a recognisable copy button: text unchanged for 30 s.
+            $qt = $msg.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Text))
+            $qsig = "$($qt.Count):" + (($qt | ForEach-Object { $_.Current.Name.Length }) | Measure-Object -Sum).Sum
+            if ($qsig -ne $quietSig -or $qt.Count -eq 0) { $quietSig = $qsig; $quietSince = Get-Date }
+            if (((Get-Date) - $quietSince).TotalSeconds -lt 30) { $stable = 0; continue }
+            Dbg 'no copy button; text quiet 30 s -> treating as finished'
+          }
           # Code previews load lazily after "Copy Response" shows up (skeleton bars first):
           # wait until every code-block host holds a code editor and no skeleton is left.
           if ($msg.FindFirst($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::ProgressBar))) { $stable = 0; continue }

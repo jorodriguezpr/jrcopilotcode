@@ -6,6 +6,17 @@
 
 # Changelog
 
+## 0.1.3 - 2026-11-23
+
+Support for the consumer Copilot screen (personal Microsoft accounts). Before, it failed with `LAUNCH_TIMEOUT` / `NOT_ACCESSIBLE`.
+
+- The chat box is found by its class (`fai-EditorInput__input`, "Message Copilot"), which both screens share. Before, the work (Microsoft 365) screen's element id was required.
+- The focus check compares against the chat box element itself instead of its id.
+- Answers are found by their title ids when present, otherwise by Copilot's message groups.
+- Finished answers are detected by "Copy Response" or any similar copy button. As a last resort, text unchanged for 30 s counts as finished.
+- "New chat" also works with the consumer screen's **New** link.
+- `JRCOPILOT_COMPAT=1` forces the id-free lookups, for testing.
+
 ## 0.1.2 - 2026-11-23
 
 Fix: HTML answers still ended with "Copilot is answering..." until the timeout.
