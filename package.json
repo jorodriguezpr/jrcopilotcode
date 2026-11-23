@@ -2,7 +2,7 @@
   "name": "jrcopilotcode",
   "displayName": "JR Copilot Code",
   "description": "Ask the Microsoft Copilot Windows app for code and insert the answer into the editor.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "jorodriguezpr",
   "author": {
     "name": "Jose Rodriguez Arroyo",

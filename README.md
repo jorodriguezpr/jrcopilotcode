@@ -104,7 +104,7 @@ JSON lines  →  extension  →  inserts the code
 
 - The bridge types only after it confirms that the keyboard focus is in Copilot's chat box. Otherwise it stops with `FOCUS_FAILED` and types nothing, so keystrokes never land in VS Code or another window.
 - The clipboard is used to paste the question and is restored afterwards (text only).
-- The Copilot window comes to the front for a moment while the question is sent.
+- The Copilot window comes to the front for a moment while the question is sent. It then **stays visible on top, without the keyboard focus**, until the answer is read, because the Copilot app pauses its answer while its window is completely covered. You keep typing in VS Code, and Copilot goes back behind VS Code at the end.
 - Your code goes only to Microsoft Copilot, under your own account and its terms.
 
 ## Troubleshooting
@@ -113,6 +113,7 @@ JSON lines  →  extension  →  inserts the code
 |---|---|
 | `NOT_ACCESSIBLE` / `NOT_RUNNING` | Run *Copilot App: Restart the Copilot app with accessibility on* |
 | `FOCUS_FAILED` | Windows didn't let the Copilot window take the focus. Nothing was typed. Ask again, and don't click elsewhere for about 1 s. |
+| `COPILOT_ERROR` | Copilot shows "Unable to load the content". The extension clicks Refresh by itself before asking. If it happens during an answer, click Refresh in Copilot and ask again. If it keeps happening, wait a few minutes, because Copilot may be limiting requests. |
 | `TIMEOUT` / `NO_ANSWER` | Look at the Copilot window. It may want you to sign in, have hit a usage limit, or still be answering. Raise `timeoutSeconds` if needed. |
 | Stopped working after a Copilot update | The Copilot page changed. The names the bridge depends on are all in `bridge/copilot-bridge.ps1`. Please open an issue. |
 

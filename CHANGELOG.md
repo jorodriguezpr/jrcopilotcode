@@ -6,6 +6,17 @@
 
 # Changelog
 
+## 0.1.1 - 2026-11-23
+
+Fix: the extension kept showing "Copilot is answering..." until the timeout, and the code was never inserted.
+
+- The Copilot app pauses its answer while its window is completely covered, for example by a maximized VS Code. While it answers, Copilot's window now stays visible on top without the keyboard focus, and goes back behind VS Code afterwards. Chromium's `--disable-backgrounding-*` switches were tried and don't help.
+- The answer is found again on every check instead of reusing an element that may have been replaced.
+- The bridge waits for the lazily loaded code previews (placeholder bars → code editor) before reading. Before, an answer could come back with no code blocks.
+- The focus goes back to VS Code reliably: ALT unlock, then attaching to the foreground window's input thread, then a final fallback. It's restored again after reading.
+- Copilot's "Unable to load the content" page: the extension clicks Refresh by itself before asking, and if it appears during an answer you get a clear `COPILOT_ERROR` instead of a timeout.
+- `JRCOPILOT_DEBUG=1` adds debug lines to the bridge output.
+
 ## 0.1.0 - 2026-11-23
 
 First release.

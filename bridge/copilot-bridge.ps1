@@ -54,6 +54,12 @@ Add-Type -Namespace JrCopilot -Name Win32 -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr hWnd);
 [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, System.IntPtr pid);
+[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(System.IntPtr hWnd);
+[DllImport("user32.dll")] public static extern void SwitchToThisWindow(System.IntPtr hWnd, bool altTab);
+[DllImport("user32.dll")] public static extern bool SetWindowPos(System.IntPtr hWnd, System.IntPtr after, int x, int y, int cx, int cy, uint flags);
 '@
 
 $AE = [System.Windows.Automation.AutomationElement]
@@ -64,6 +70,7 @@ $MSGLIST_ID = 'llm-web-ui-messageList-scrollable-container'
 
 function Out-Json($obj) { [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compress -Depth 6)); [Console]::Out.Flush() }
 function Say($msg) { Out-Json @{ type = 'progress'; message = $msg } }
+function Dbg($msg) { if ($env:JRCOPILOT_DEBUG) { Out-Json @{ type = 'debug'; message = "$msg | fg=$([JrCopilot.Win32]::GetForegroundWindow())" } } }
 function Fail($code, $msg) { Out-Json @{ type = 'result'; ok = $false; code = $code; error = $msg }; exit 1 }
 
 function Cond($prop, $value) { New-Object System.Windows.Automation.PropertyCondition($prop, $value) }
@@ -109,13 +116,23 @@ function Set-Clip($text) {
 }
 
 function Bring-ToFront($hwnd) {
-  if ([JrCopilot.Win32]::IsIconic($hwnd)) { [JrCopilot.Win32]::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
-  if (-not [JrCopilot.Win32]::SetForegroundWindow($hwnd)) {
-    # Windows refuses focus changes unless the caller "owns" input; a synthetic ALT press unlocks it.
-    [JrCopilot.Win32]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
-    [JrCopilot.Win32]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
-    [JrCopilot.Win32]::SetForegroundWindow($hwnd) | Out-Null
-  }
+  $W = [JrCopilot.Win32]
+  if ($W::IsIconic($hwnd)) { $W::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
+  if ($W::GetForegroundWindow() -eq $hwnd) { return }
+  # Windows refuses focus changes unless the caller "owns" input; a synthetic ALT press unlocks it.
+  $W::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+  $W::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+  $W::SetForegroundWindow($hwnd) | Out-Null
+  Start-Sleep -Milliseconds 100
+  if ($W::GetForegroundWindow() -eq $hwnd) { return }
+  # Join the current foreground window's input queue, then switch.
+  $fgThread = $W::GetWindowThreadProcessId($W::GetForegroundWindow(), [IntPtr]::Zero)
+  $me = $W::GetCurrentThreadId()
+  $attached = $fgThread -ne $me -and $W::AttachThreadInput($me, $fgThread, $true)
+  try { $W::BringWindowToTop($hwnd) | Out-Null; $W::SetForegroundWindow($hwnd) | Out-Null }
+  finally { if ($attached) { $W::AttachThreadInput($me, $fgThread, $false) | Out-Null } }
+  Start-Sleep -Milliseconds 100
+  if ($W::GetForegroundWindow() -ne $hwnd) { $W::SwitchToThisWindow($hwnd, $true) }
 }
 
 # All Text names under an element, in document order, via the RAW view
@@ -126,6 +143,18 @@ function Get-RawText($el, $acc) {
   while ($ch) {
     if ($ch.Current.ControlType -eq $CT::Text) { $acc.Add($ch.Current.Name) } else { Get-RawText $ch $acc }
     $ch = $RAW.GetNextSibling($ch)
+  }
+}
+
+# The Copilot app stops generating while its window is fully covered (Chromium occlusion; the
+# --disable-backgrounding-* switches do not help). While it answers, keep it on top WITHOUT
+# activating it, so the keyboard stays in VS Code; afterwards put it back behind VS Code.
+$SWP_KEEP = 0x0001 -bor 0x0002 -bor 0x0010   # NOSIZE | NOMOVE | NOACTIVATE
+function Set-OnTop($hwnd) { [JrCopilot.Win32]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, $SWP_KEEP) | Out-Null }   # HWND_TOPMOST
+function Clear-OnTop($hwnd, $behind) {
+  [JrCopilot.Win32]::SetWindowPos($hwnd, [IntPtr](-2), 0, 0, 0, 0, $SWP_KEEP) | Out-Null                               # HWND_NOTOPMOST
+  if ($behind -and $behind -ne [IntPtr]::Zero -and $behind -ne $hwnd) {
+    [JrCopilot.Win32]::SetWindowPos($hwnd, $behind, 0, 0, 0, 0, $SWP_KEEP) | Out-Null                                  # just behind VS Code
   }
 }
 
@@ -196,10 +225,25 @@ function Start-Accessible {
   Fail 'LAUNCH_TIMEOUT' 'The Copilot app started but its chat box did not appear within 60 s (is it signed in?).'
 }
 
+# Copilot's own error page: "Unable to load the content / Try refreshing / [Refresh]".
+function Test-PageError($root) {
+  return [bool]($root.FindFirst($Scope::Descendants, (Cond $AE::NameProperty 'Unable to load the content')))
+}
+
 function Require-Ready {
   $w = Get-CopilotWindow
   if (-not $w) { Fail 'NOT_RUNNING' 'The Copilot app is not running.' }
   $ed = Find-Editor $w
+  if (-not $ed -and (Test-PageError $w)) {
+    # Nothing was asked yet, so refreshing is safe.
+    Say 'Copilot shows "Unable to load the content" - refreshing it...'
+    $btn = Find-ByName $w 'Refresh' $CT::Button
+    if ($btn) {
+      Invoke-Element $btn
+      for ($i = 0; $i -lt 20 -and -not $ed; $i++) { Start-Sleep -Milliseconds 750; $ed = Find-Editor $w }
+    }
+    if (-not $ed) { Fail 'COPILOT_ERROR' 'Copilot shows "Unable to load the content" and Refresh did not fix it. Check the Copilot app (sign-in, internet, usage limits).' }
+  }
   if (-not $ed) { Fail 'NOT_ACCESSIBLE' 'The Copilot app is running without accessibility, so its chat cannot be read. Restart it with accessibility enabled.' }
   return $w
 }
@@ -239,6 +283,7 @@ try {
       $prevFg = [JrCopilot.Win32]::GetForegroundWindow()
       $savedClip = Get-Clip
       $started = Get-Date
+      $onTop = $false
       try {
         Say 'Sending the question to the Copilot app...'
         Set-Clip $prompt
@@ -260,25 +305,43 @@ try {
         }
         [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
         Start-Sleep -Milliseconds 300
-        if (-not $NoRestoreFocus -and $prevFg -ne [IntPtr]::Zero) { [JrCopilot.Win32]::SetForegroundWindow($prevFg) | Out-Null }
+        Dbg "sent; copilot=$hwnd prev=$prevFg"
+        # Keep Copilot visible (it pauses when covered) but hand the keyboard back to VS Code.
+        Set-OnTop $hwnd
+        $onTop = $true
+        Dbg 'on top set'
+        if (-not $NoRestoreFocus -and $prevFg -ne [IntPtr]::Zero) {
+          Bring-ToFront $prevFg
+          Start-Sleep -Milliseconds 150
+          if ([JrCopilot.Win32]::GetForegroundWindow() -ne $prevFg) { Bring-ToFront $prevFg }
+          Dbg 'focus restored?'
+        }
 
         Say 'Waiting for the answer...'
         $deadline = $started.AddSeconds($TimeoutSec)
-        $msg = $null; $lastSig = ''; $stable = 0
+        $msg = $null; $lastSig = ''; $stable = 0; $announced = $false; $polls = 0
         while ((Get-Date) -lt $deadline) {
           Start-Sleep -Milliseconds 800
-          if (-not $msg) {
-            $new = @(Get-CopilotTitles $w | Where-Object { -not $before.ContainsKey($_.Current.AutomationId) })
-            if ($new.Count -gt 0) {
-              $msg = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($new[-1])
-              Say 'Copilot is answering...'
-            }
-            continue
-          }
+          if ((++$polls % 5) -eq 1) { Dbg "poll $polls" }
+          if (Test-PageError $w) { Fail 'COPILOT_ERROR' 'Copilot shows "Unable to load the content". Click Refresh in the Copilot app and ask again (if it keeps happening, wait a few minutes - Copilot may be limiting requests).' }
+          # Find the newest answer again on every poll: React can replace the element while streaming.
+          $new = @(Get-CopilotTitles $w | Where-Object { -not $before.ContainsKey($_.Current.AutomationId) })
+          if ($new.Count -eq 0) { continue }
+          $msg = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($new[-1])
+          if (-not $msg) { continue }
+          if (-not $announced) { Say 'Copilot is answering...'; $announced = $true }
           $done = [bool](Find-ByName $msg 'Copy Response' $CT::Button)
           if (-not $done) { $stable = 0; continue }
+          # Code previews load lazily after "Copy Response" shows up (skeleton bars first):
+          # wait until every code-block host holds a code editor and no skeleton is left.
+          if ($msg.FindFirst($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::ProgressBar))) { $stable = 0; continue }
+          $groups = $msg.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Group))
+          $hosts = @($groups | Where-Object { $_.Current.AutomationId -like 'code-block-host-*' }).Count
+          $ready = @($groups | Where-Object { $_.Current.ClassName -like 'scriptor-component-code-block*' } |
+                     Where-Object { $_.FindFirst($Scope::Descendants, (Cond $AE::NameProperty 'Code editor')) }).Count
+          if ($ready -lt $hosts) { $stable = 0; continue }
           $texts = $msg.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Text))
-          $sig = "$($texts.Count):" + (($texts | ForEach-Object { $_.Current.Name.Length }) | Measure-Object -Sum).Sum
+          $sig = "$hosts/$($texts.Count):" +(($texts | ForEach-Object { $_.Current.Name.Length }) | Measure-Object -Sum).Sum
           if ($sig -eq $lastSig) { $stable++ } else { $stable = 0; $lastSig = $sig }
           if ($stable -ge 2) { break }
         }
@@ -290,6 +353,11 @@ try {
         $text = Get-ResponseText $msg
         Out-Json @{ type = 'result'; ok = $true; text = $text; blocks = $blocks; elapsedMs = [int]((Get-Date) - $started).TotalMilliseconds }
       } finally {
+        if ($onTop) {
+          Clear-OnTop $hwnd $(if ($NoRestoreFocus) { [IntPtr]::Zero } else { $prevFg })
+          # Invoking Copilot's copy buttons can activate its window: hand the keyboard back again.
+          if (-not $NoRestoreFocus -and $prevFg -ne [IntPtr]::Zero -and [JrCopilot.Win32]::GetForegroundWindow() -ne $prevFg) { Bring-ToFront $prevFg }
+        }
         Set-Clip $savedClip
       }
     }
