@@ -6,6 +6,13 @@
 
 # Changelog
 
+## 0.1.2 - 2026-11-23
+
+Fix: HTML answers still ended with "Copilot is answering..." until the timeout.
+
+- Copilot shows HTML (and similar) code blocks as a live **preview** of the page, with no code editor, so the bridge waited for code that never appeared. It now clicks Copilot's **Code** button to switch the block to the code view, then reads it.
+- Safety net: if a code block still can't be read once the answer has been finished and unchanged for 15 s, the bridge returns the answer anyway instead of waiting until the timeout.
+
 ## 0.1.1 - 2026-11-23
 
 Fix: the extension kept showing "Copilot is answering..." until the timeout, and the code was never inserted.

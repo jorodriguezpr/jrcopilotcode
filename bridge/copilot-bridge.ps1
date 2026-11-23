@@ -319,7 +319,7 @@ try {
 
         Say 'Waiting for the answer...'
         $deadline = $started.AddSeconds($TimeoutSec)
-        $msg = $null; $lastSig = ''; $stable = 0; $announced = $false; $polls = 0
+        $msg = $null; $lastSig = ''; $stable = 0; $announced = $false; $polls = 0; $notReadySince = $null
         while ((Get-Date) -lt $deadline) {
           Start-Sleep -Milliseconds 800
           if ((++$polls % 5) -eq 1) { Dbg "poll $polls" }
@@ -335,14 +335,28 @@ try {
           # Code previews load lazily after "Copy Response" shows up (skeleton bars first):
           # wait until every code-block host holds a code editor and no skeleton is left.
           if ($msg.FindFirst($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::ProgressBar))) { $stable = 0; continue }
+          # HTML/SVG blocks open as a live PREVIEW (rendered page, no code editor): switch them to "Code".
+          $toggles = @($msg.FindAll($Scope::Descendants, (Cond $AE::AutomationIdProperty 'preview-toggle-button')) |
+                       Where-Object { $_.Current.Name -eq 'Code' })
+          if ($toggles.Count -gt 0) {
+            foreach ($tg in $toggles) { try { Invoke-Element $tg; Dbg 'preview -> code view' } catch {} }
+            $stable = 0; Start-Sleep -Milliseconds 500; continue
+          }
           $groups = $msg.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Group))
           $hosts = @($groups | Where-Object { $_.Current.AutomationId -like 'code-block-host-*' }).Count
           $ready = @($groups | Where-Object { $_.Current.ClassName -like 'scriptor-component-code-block*' } |
                      Where-Object { $_.FindFirst($Scope::Descendants, (Cond $AE::NameProperty 'Code editor')) }).Count
-          if ($ready -lt $hosts) { $stable = 0; continue }
           $texts = $msg.FindAll($Scope::Descendants, (Cond $AE::ControlTypeProperty $CT::Text))
-          $sig = "$hosts/$($texts.Count):" +(($texts | ForEach-Object { $_.Current.Name.Length }) | Measure-Object -Sum).Sum
+          $sig = "$hosts/$ready/$($texts.Count):" +(($texts | ForEach-Object { $_.Current.Name.Length }) | Measure-Object -Sum).Sum
           if ($sig -eq $lastSig) { $stable++ } else { $stable = 0; $lastSig = $sig }
+          if ($ready -lt $hosts) {
+            # Safety net: never wait forever for a code view that does not come (unknown block type).
+            # Once the answer has been finished and unchanged for 15 s, read what is there.
+            if ($stable -eq 0 -or -not $notReadySince) { $notReadySince = Get-Date }
+            Dbg "code blocks ready $ready/$hosts"
+            if (((Get-Date) - $notReadySince).TotalSeconds -ge 15) { $stable = 2; break }
+            continue
+          }
           if ($stable -ge 2) { break }
         }
         if (-not $msg) { Fail 'NO_ANSWER' "No answer appeared within $TimeoutSec s." }
