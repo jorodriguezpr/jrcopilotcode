@@ -1,3 +1,6 @@
+# JR Copilot Code (jrcopilotcode)
+# Copyright 2026 Jose Rodriguez Arroyo - Apache-2.0 - https://github.com/jorodriguezpr/jrcopilotcode
 node_modules/
+dist/
 *.vsix
 .vscode-test/

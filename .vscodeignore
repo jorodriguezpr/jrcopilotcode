@@ -1,5 +1,11 @@
+# JR Copilot Code (jrcopilotcode) - files left out of the .vsix
+# Copyright 2026 Jose Rodriguez Arroyo - Apache-2.0 - https://github.com/jorodriguezpr/jrcopilotcode
 test/**
+installer/**
+dist/**
+build.ps1
 .git/**
 .gitignore
+.gitattributes
 *.vsix
 node_modules/**

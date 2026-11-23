@@ -1,0 +1,18 @@
+JR Copilot Code (jrcopilotcode)
+Copyright 2026 Jose Rodriguez Arroyo
+
+Developer: Jose Rodriguez Arroyo <jrpcone@gmail.com>
+Website:   https://microrepair.net
+GitHub:    https://github.com/jorodriguezpr
+Project:   https://github.com/jorodriguezpr/jrcopilotcode
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This extension has no runtime dependencies. It uses, without bundling them:
+  - Visual Studio Code extension API - MIT License
+  - Windows UI Automation / .NET Framework (part of Windows)
+  - Microsoft Copilot app (installed separately by the user; Microsoft Services Agreement)
+Build tool (not included): @vscode/vsce - MIT License
+
+Microsoft, Copilot, Windows and Visual Studio Code are trademarks of the Microsoft group of
+companies. This project is not affiliated with or endorsed by Microsoft.

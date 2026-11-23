@@ -4,8 +4,16 @@
   "description": "Ask the Microsoft Copilot Windows app for code and insert the answer into the editor.",
   "version": "0.1.0",
   "publisher": "jorodriguezpr",
-  "author": "Jose Rodriguez - Micro Computer Repair Services (http://www.microrepair.net)",
-  "license": "UNLICENSED",
+  "author": {
+    "name": "Jose Rodriguez Arroyo",
+    "email": "jrpcone@gmail.com",
+    "url": "https://microrepair.net"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/jorodriguezpr/jrcopilotcode#readme",
+  "repository": { "type": "git", "url": "https://github.com/jorodriguezpr/jrcopilotcode.git" },
+  "bugs": { "url": "https://github.com/jorodriguezpr/jrcopilotcode/issues" },
+  "keywords": ["copilot", "microsoft copilot", "code generation", "ai", "windows", "ui automation"],
   "private": true,
   "engines": { "vscode": "^1.85.0" },
   "os": ["win32"],
@@ -83,6 +91,7 @@
   },
   "scripts": {
     "test": "node --test test/lib.test.js",
-    "package": "npx --yes @vscode/vsce package --allow-missing-repository --skip-license"
+    "package": "npx --yes @vscode/vsce@3 package --out dist/",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1"
   }
 }
